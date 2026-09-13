@@ -1,0 +1,102 @@
+name: build-ipa
+
+# Builds an unsigned PhotosBackup IPA on a GitHub-hosted macOS runner and
+# publishes it as a release, so SideStore can install it straight from a URL.
+#
+# Set the repository variable SIGNING_TEAM_ID (Settings -> Secrets and
+# variables -> Actions -> Variables) to the team ID that SideStore appends to
+# the bundle identifier on your device. Leave it unset to build stock.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Attach the IPA to a release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select Xcode 16.4
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Patch background task identifier
+        if: vars.SIGNING_TEAM_ID != ''
+        env:
+          TEAM_ID: ${{ vars.SIGNING_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          OLD="com.g8row.photosbackup.background-backup"
+          NEW="com.g8row.photosbackup.${TEAM_ID}.background-backup"
+
+          # SideStore rewrites CFBundleIdentifier to com.g8row.photosbackup.<TEAM_ID>
+          # at install time, which leaves the stock task identifier outside the
+          # installed app's bundle ID and makes BGTaskScheduler.register return
+          # false. Moving both the Swift constant and the Info.plist entry under
+          # the post-resign bundle ID keeps them in agreement.
+          sed -i '' "s|${OLD}|${NEW}|g" App/Sources/AutomaticBackupCoordinator.swift
+          sed -i '' "s|${OLD}|${NEW}|g" App/Resources/Info.plist
+
+          echo "Patched task identifier to ${NEW}"
+          grep -n "background-backup" App/Sources/AutomaticBackupCoordinator.swift App/Resources/Info.plist
+
+      - name: Verify patch is consistent
+        if: vars.SIGNING_TEAM_ID != ''
+        run: |
+          set -euo pipefail
+          # Both files must carry the same string, or registration fails again
+          # for a different reason and the build is not worth installing.
+          swift_count=$(grep -c "background-backup" App/Sources/AutomaticBackupCoordinator.swift)
+          plist_count=$(grep -c "background-backup" App/Resources/Info.plist)
+          if [ "$plist_count" -ne 1 ] || [ "$swift_count" -lt 1 ]; then
+            echo "Unexpected occurrence counts (swift=$swift_count plist=$plist_count)" >&2
+            exit 1
+          fi
+
+      - name: Build unsigned IPA
+        env:
+          DEVELOPER_DIR: ${{ env.DEVELOPER_DIR }}
+        run: ./Scripts/make-ipa.sh Release
+
+      - name: Name the build
+        id: name
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c "Print :MARKETING_VERSION" /dev/stdin 2>/dev/null <<< "" || true)
+          version=$(grep -m1 "MARKETING_VERSION:" project.yml | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}-local.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotosBackup-${{ steps.name.outputs.version }}
+          path: build/PhotosBackup.ipa
+          if-no-files-found: error
+
+      - name: Publish release
+        if: inputs.publish_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.name.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" build/PhotosBackup.ipa \
+            --title "PhotosBackup ${{ steps.name.outputs.version }} (patched)" \
+            --notes "Unsigned build with the background task identifier patched for on-device re-signing. Install with SideStore." \
+            --latest=false
+          echo "Direct install URL:"
+          echo "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/PhotosBackup.ipa"

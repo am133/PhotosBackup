@@ -8,6 +8,8 @@ name: build-ipa
 # the bundle identifier on your device. Leave it unset to build stock.
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       publish_release:
@@ -89,7 +91,8 @@ jobs:
           if-no-files-found: error
 
       - name: Publish release
-        if: inputs.publish_release
+        id: release
+        if: github.event_name == 'push' || inputs.publish_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.name.outputs.tag }}
@@ -99,5 +102,60 @@ jobs:
             --title "PhotosBackup ${{ steps.name.outputs.version }} (patched)" \
             --notes "Unsigned build with the background task identifier patched for on-device re-signing. Install with SideStore." \
             --latest=false
+          echo "published=true" >> "$GITHUB_OUTPUT"
           echo "Direct install URL:"
           echo "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/PhotosBackup.ipa"
+
+      - name: Update SideStore source
+        if: steps.release.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.name.outputs.version }}
+          TAG: ${{ steps.name.outputs.tag }}
+        run: |
+          set -euo pipefail
+          SIZE=$(stat -f%z build/PhotosBackup.ipa)
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/PhotosBackup.ipa"
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          ICON_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          WORKDIR=$(mktemp -d)
+          if git clone --quiet --depth 1 --branch sidestore-source "$REPO_URL" "$WORKDIR" 2>/dev/null; then
+            :
+          else
+            git clone --quiet --depth 1 "$REPO_URL" "$WORKDIR"
+            (cd "$WORKDIR" && git checkout --orphan sidestore-source && git rm -rf . >/dev/null)
+          fi
+
+          cat > "$WORKDIR/apps.json" <<JSON
+          {
+            "name": "PhotosBackup (patched, unofficial)",
+            "identifier": "com.am133.photosbackup-sidestore-source",
+            "apps": [
+              {
+                "name": "PhotosBackup",
+                "bundleIdentifier": "com.g8row.photosbackup",
+                "developerName": "g8row (background-task patch by am133)",
+                "subtitle": "Unsigned build with the background task fix for SideStore",
+                "localizedDescription": "Unofficial rebuild of g8row/PhotosBackup with the BGTaskScheduler identifier patched at build time so background backup registers correctly after SideStore re-signs the app. Rebuilt automatically whenever upstream changes.",
+                "iconURL": "${ICON_URL}",
+                "version": "${VERSION}",
+                "versionDate": "${DATE}",
+                "downloadURL": "${DOWNLOAD_URL}",
+                "size": ${SIZE}
+              }
+            ]
+          }
+          JSON
+
+          cd "$WORKDIR"
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git add apps.json
+          if git diff --cached --quiet; then
+            echo "apps.json already up to date"
+          else
+            git commit -m "Update SideStore source to ${VERSION} (${TAG})"
+            git push origin HEAD:sidestore-source
+          fi

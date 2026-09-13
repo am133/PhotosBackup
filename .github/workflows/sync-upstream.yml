@@ -1,0 +1,39 @@
+name: sync-upstream
+
+# Keeps this fork's main branch a fast-forward mirror of g8row/PhotosBackup.
+# main never carries the background-task patch (build-ipa.yml applies that at
+# build time only), so this merge is always a plain fast-forward - if it ever
+# isn't, upstream's history was rewritten and this fails loudly instead of
+# silently diverging.
+#
+# A push to main here triggers build-ipa.yml (on: push), which rebuilds,
+# publishes a release, and updates the SideStore source file.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward main from upstream
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/g8row/PhotosBackup.git
+          git fetch upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date with upstream."
+            exit 0
+          fi
+          git merge --ff-only upstream/main
+          git push origin main
+          echo "Fast-forwarded to $(git rev-parse --short upstream/main)"

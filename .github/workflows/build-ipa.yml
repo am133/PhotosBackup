@@ -67,8 +67,6 @@ jobs:
           fi
 
       - name: Build unsigned IPA
-        env:
-          DEVELOPER_DIR: ${{ env.DEVELOPER_DIR }}
         run: ./Scripts/make-ipa.sh Release
 
       - name: Name the build

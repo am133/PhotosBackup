@@ -1,0 +1,18 @@
+{
+  "name": "PhotosBackup (patched, unofficial)",
+  "identifier": "com.am133.photosbackup-sidestore-source",
+  "apps": [
+    {
+      "name": "PhotosBackup",
+      "bundleIdentifier": "com.g8row.photosbackup",
+      "developerName": "g8row (background-task patch by am133)",
+      "subtitle": "Unsigned build with the background task fix for SideStore",
+      "localizedDescription": "Unofficial rebuild of g8row/PhotosBackup with the BGTaskScheduler identifier patched at build time so background backup registers correctly after SideStore re-signs the app. Rebuilt automatically whenever upstream changes.",
+      "iconURL": "https://raw.githubusercontent.com/am133/PhotosBackup/main/App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png",
+      "version": "0.3.6",
+      "versionDate": "2026-09-13T05:02:14Z",
+      "downloadURL": "https://github.com/am133/PhotosBackup/releases/download/v0.3.6-local.3/PhotosBackup.ipa",
+      "size": 2684339
+    }
+  ]
+}
